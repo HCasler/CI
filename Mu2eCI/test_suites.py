@@ -21,6 +21,7 @@ TEST_REGEXP_MU2E_BUILDTEST_TRIGGER = (
     r"(please\s*[,]*\\s+|)((build)|(run\s+build\s+test(s|)))"
     r"(?P<test_with>\s+with\s+((Mu2e\/[A-Za-z0-9_-]+|)#[0-9]+([\\s,]+|))+|)"
     r"(?P<wo_merge>\s*without\s+merge|)"
+    r"(?P<force_test>\s*force|)"
 )
 REGEX_BUILDTEST_MU2E_PR = re.compile(TEST_REGEXP_MU2E_BUILDTEST_TRIGGER, re.I | re.M)
 
@@ -117,6 +118,7 @@ def build_test_configuration(matched_re):
 
     test_with = matched_re.group("test_with")
     no_merge = matched_re.group("wo_merge")
+    force_test = matched_re.group("force_test")
 
     test_with = (
         (test_with.replace("with", "").strip()) if len(test_with.strip()) > 0 else ""
@@ -137,11 +139,12 @@ def build_test_configuration(matched_re):
             prs_to_include.append(f"{repository}#{pr_id}")
 
     no_merge = "1" if len(no_merge.strip()) > 0 else "0"
+    force_test = "1" if len(force_test.strip()) > 0 else "0"
 
     return (
         ["build"],
         "current",
-        {"TEST_WITH_PR": ",".join(prs_to_include), "NO_MERGE": no_merge},
+        {"TEST_WITH_PR": ",".join(prs_to_include), "NO_MERGE": no_merge, "FORCE_TEST": force_test},
     )
 
 
