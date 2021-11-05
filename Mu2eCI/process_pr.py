@@ -73,18 +73,18 @@ def process_pr(gh, repo, issue, dryRun=False, child_call=0):
         log.info("Ignoring: PR in closed state")
         return
 
-    mu2eorg = gh.get_organization("Mu2e")
-    trusted_user = mu2eorg.has_in_members(issue.user)
+    mu2eorg = gh.get_organization("Mu2e") # replaceable
+    trusted_user = mu2eorg.has_in_members(issue.user) # replaceable
 
     authorised_users, authed_teams = get_authorised_users(
         mu2eorg, repo, branch=pr.base.ref
-    )
+    ) # replaceable
 
     # allow the PR author to execute CI actions:
     if trusted_user:
-        authorised_users.add(issue.user.login)
+        authorised_users.add(issue.user.login) # replaceable
 
-    log.debug("Authorised Users: %s", ", ".join(authorised_users))
+    log.debug("Authorised Users: %s", ", ".join(authorised_users)) # replaceable
 
     not_seen_yet = True
     last_time_seen = None
@@ -118,24 +118,24 @@ def process_pr(gh, repo, issue, dryRun=False, child_call=0):
     watcher_text = ""
     watcher_list = []
     try:
-        modified_targs = [x.lower() for x in modified_top_level_folders]
-        for user, packages in watchers.items():
-            for pkgpatt in packages:
-                try:
-                    regex_comp = re.compile(pkgpatt, re.I)
-                    for target in modified_targs:
-                        if (target == "/" and pkgpatt == "/") or regex_comp.match(
-                            target.strip()
-                        ):
-                            watcher_list.append(user)
-                            break
-                except Exception:
-                    log.warning(
-                        "ERROR: Possibly bad regex for watching user %s: %s"
-                        % (user, pkgpatt)
-                    )
+        modified_targs = [x.lower() for x in modified_top_level_folders] # replaceable
+        for user, packages in watchers.items(): # replaceable
+            for pkgpatt in packages: # replaceable
+                try: # replaceable
+                    regex_comp = re.compile(pkgpatt, re.I) # replaceable
+                    for target in modified_targs: # replaceable
+                        if (target == "/" and pkgpatt == "/") or regex_comp.match( # replaceable
+                            target.strip() # replaceable
+                        ): # replaceable
+                            watcher_list.append(user) # replaceable
+                            break # replaceable
+                except Exception: # replaceable
+                    log.warning( # replaceable
+                        "ERROR: Possibly bad regex for watching user %s: %s" # replaceable
+                        % (user, pkgpatt) # replaceable
+                    ) # replaceable
 
-        watcher_list = set(watcher_list)
+        watcher_list = set(watcher_list) # replaceable
         if len(watcher_list) > 0:
             watcher_text = (
                 "The following users requested to be notified about "
@@ -146,8 +146,8 @@ def process_pr(gh, repo, issue, dryRun=False, child_call=0):
         log.exception("There was a problem while trying to build the watcher list...")
 
     # get required tests
-    test_requirements = test_suites.get_tests_for(modified_top_level_folders)
-    log.info("Tests required: %s", ", ".join(test_requirements))
+    test_requirements = test_suites.get_tests_for(modified_top_level_folders) # replaceable
+    log.info("Tests required: %s", ", ".join(test_requirements))  # replaceable
 
     # set their status to 'pending' (will be updated shortly after)
     for test in test_requirements:
@@ -157,9 +157,9 @@ def process_pr(gh, repo, issue, dryRun=False, child_call=0):
 
     # this will be the commit of master that the PR is merged
     # into for the CI tests (for a build test this is just the current HEAD.)
-    master_commit_sha = repo.get_branch(
+    master_commit_sha = repo.get_branch( # replaceable
         branch=pr.base.ref
-    ).commit.sha  # repo.get_branch("master").commit.sha
+    ).commit.sha  # repo.get_branch("master").commit.sha  # replaceable
 
     # get latest commit
     last_commit = pr.get_commits().reversed[0]
@@ -206,7 +206,7 @@ def process_pr(gh, repo, issue, dryRun=False, child_call=0):
     stalled_job_info = ""
     legit_tests = set()
 
-    for stat in commit_status:
+    for stat in commit_status:  # replaceable START
         name = test_suites.get_test_name(stat.context)
         log.debug(f"Processing commit status: {stat.context}")
         if "buildtest/last" in stat.context:
@@ -269,7 +269,7 @@ def process_pr(gh, repo, issue, dryRun=False, child_call=0):
             test_statuses[name] = "running"
             test_urls[name] = str(stat.target_url)
         if "stalled" in stat.description:
-            test_statuses[name] = "stalled"
+            test_statuses[name] = "stalled" # replaceable END
 
     if (
         (master_commit_sha_last_test is None or base_branch_HEAD_changed)
