@@ -13,6 +13,43 @@ from Mu2eCI.common import (
     get_modified
 )
 
+class TestFail:
+    NOCOMMAND = "nocommand"
+    INVALIDINPUT = "invalidinput"
+    GENERICFAIL = "genericfail"
+
+class PRConditions:
+    # Class that just hold the info we need to decide what to do with this PR.
+    def __init__(self):
+        self.prId = pr.id # int
+        self.author = pr.user.login # str
+        self.trustedAuthor = None # bool # DONE
+        self.authorizedUsers = None # set # DONE
+        self.authedTeams = None # set # DONE
+        self.modifiedFolders = None # set DONE
+        self.watcherList = None # set # DONE
+        self.requiredTests = [] # list of str # DONE
+        self.baseCommitSha = None # str # DONE
+        self.lastCommit = None # git commit 
+        self.baseCommitSha_lastTest = None # str # DONE
+        self.commitStatusTime = {} # DONE
+        self.baseHeadChanged = None # bool # DONE
+        # commit test states:
+        self.test_statuses = {} # DONE
+        self.test_triggered = {} # DONE
+        self.test_status_exists = {} # DONE
+        self.tests_already_triggered = [] # DONE
+        self.legit_tests = set() # DONE
+        self.lastCommitDate = None
+        self.newPR = None # bool # DONE
+        self.commentsList = None # DONE
+        self.lastTimeSeen = None # DONE
+        self.previousBotComments = [] # str, comments BY the bot
+        self.botInvokingComments = [] # gh comments, by others TAGGING the bot
+        self.testsRequested = [] # indices sync up with botInvokingComments
+        self.extraEnvs = []
+
+
 class PRConditionsBuilder:
     # Builder class for PRConditions. Use like:
     # prConditions = PRConditionsBuilder(gh, pr, repo)\
@@ -20,8 +57,6 @@ class PRConditionsBuilder:
     #                .determineModifiedFoldersAndWatchers()\
     #                .moreMethods()\
     #                .build()
-    # As long as you call the constructor first and build() last, you should 
-    # be able to call the other methods in any order.
 
     def __init__(self, gh, pr, repo):
         self.gh = gh
@@ -46,17 +81,14 @@ class PRConditionsBuilder:
         self.test_status_exists = {} # DONE
         self.tests_already_triggered = [] # DONE
         self.legit_tests = set() # DONE
-        
-        self.newPR = None # bool
-
-        
-        
-        self.last_time_seen = None
-        self.labels = set()
-        
-
-        # tests we'd like to trigger on this commit
-        self.tests_to_trigger = []
+        self.lastCommitDate = None
+        self.newPR = None # bool # DONE
+        self.commentsList = None # DONE
+        self.lastTimeSeen = None # DONE
+        self.previousBotComments = [] # str, comments BY the bot
+        self.botInvokingComments = [] # gh comments, by others TAGGING the bot
+        self.testsRequested = [] # indices sync up with botInvokingComments
+        self.extraEnvs = []
         
         
 
@@ -177,7 +209,7 @@ class PRConditionsBuilder:
         log.debug(
             "Latest commit by %s at %r",
             git_commit.committer.name,
-            last_commit_date,
+            self.lastCommitDate,
         )
         self._logCommitInfo(git_commit)
         
@@ -226,3 +258,148 @@ class PRConditionsBuilder:
                 self.test_urls[name] = str(stat.target_url)
             if "stalled" in stat.description:
                 self.test_statuses[name] = "stalled"
+        return self
+
+    def determineIfNew(self):
+        not_seen_yet = True
+        last_time_seen = None
+        if self.commentsList is None:
+            issue = self.repo.get_issue(self.prId)
+            self.commentsList = issue.issue.get_comments()
+        for comment in self.commentsList:
+            # loop through once to ascertain when the bot last commented
+            if comment.user.login == config.main["bot"]["username"]:
+                if last_time_seen is None or last_time_seen < comment.created_at:
+                    not_seen_yet = False
+                    last_time_seen = comment.created_at
+                    log.debug(
+                        "Bot user comment found: %s, %s",
+                        comment.user.login,
+                        str(last_time_seen),
+                    )
+        log.info("Last time seen %s", str(last_time_seen))
+        self.newPR = not_seen_yet
+        self.lastTimeSeen = last_time_seen
+        return self
+
+    def _shouldIgnoreComment(self, comment):
+        # Ignore all messages which are before last commit.
+        if comment.created_at < self.lastCommitDate:
+            log.debug("IGNORE COMMENT (before last commit)")
+            return True
+        # neglect comments we've already responded to
+        if self.lastTimeSeen is not None and (comment.created_at < self.lastTimeSeen):
+            log.debug(
+                "IGNORE COMMENT (seen) %s %s < %s",
+                comment.user.login,
+                str(comment.created_at),
+                str(self.lastTimeSeen),
+            )
+            return True
+        # neglect comments by un-authorised users
+        if (
+            comment.user.login not in self.authorizedUsers
+            or comment.user.login == config.main["bot"]["username"]
+        ):
+            log.debug(
+                "IGNORE COMMENT (unauthorised, or bot user) - %s", comment.user.login
+            )
+            return True
+
+
+    def determineIfBotInvoked(self):
+        bot_comments = (
+            []
+        )  # keep a track of our comments to avoid duplicate messages and spam.
+        for comment in comments:
+            if comment.user.login == config.main["bot"]["username"]:
+                bot_comments += [comment.body.strip()]
+            # comments we should ignore
+            if self._shouldIgnoreComment(comment):
+                continue
+            for react in comment.get_reactions():
+                if react.user.login == config.main["bot"]["username"]:
+                    log.debug(
+                        "IGNORE COMMENT (we've seen it and reacted to say we've seen it) - %s",
+                        comment.user.login,
+                    )
+            testRequested = None
+            extraEnv = None
+            trigger_search, mentioned = None, None
+
+            # now look for bot triggers
+            # check if the comment has triggered a test
+            try:
+                trigger_search, mentioned = check_test_cmd_mu2e(
+                    comment.body, repo.full_name
+                )
+            except ValueError:
+                log.exception("Failed to trigger a test due to invalid inputs")
+                testRequested = TestFail.INVALIDINPUT
+            except Exception:
+                log.exception("Failed to trigger a test.")
+                testRequested = TestFail.GENERICFAIL
+            if trigger_search is not None:
+                tests, _, extra_env = trigger_search
+                log.info("Test trigger found!")
+                log.debug("Comment: %r", comment.body)
+                log.debug("Environment: %s", str(extra_env))
+                #log.info("Current test(s): %r" % tests_to_trigger)
+                log.info("Adding these test(s): %r" % tests)
+                testRequested = tests
+                extraEnv = extra_env
+            elif mentioned:
+                # we didn't recognise any commands!
+                testRequested = TestFail.NOCOMMAND
+            self.botInvokingComments.append(comment)
+            self.testsRequested.append(testRequested)
+            self.extraEnvs.append(extraEnv)
+        self.previousBotComments = bot_comments
+        return self
+
+    def build(self):
+        prConditions = PRConditions()
+        prConditions.prId = self.prId
+        prConditions.author = self.author
+        prConditions.trustedAuthor = self.trustedAuthor
+        prConditions.authorizedUsers = self.authorizedUsers
+        prConditions.authedTeams = self.authedTeams
+        prConditions.modifiedFolders = self.modifiedFolders
+        prConditions.watcherList = self.watcherList
+        prConditions.requiredTests = self.requiredTests
+        prConditions.baseCommitSha = self.baseCommitSha
+        prConditions.lastCommit = self.lastCommit
+        prConditions.baseCommitSha_lastTest = self.baseCommitSha_lastTest
+        prConditions.commitStatusTime = self.commitStatusTime
+        prConditions.baseHeadChanged = self.baseHeadChanged
+        # commit test states:
+        prConditions.test_statuses = self.test_statuses
+        prConditions.test_triggered = self.test_triggered
+        prConditions.test_status_exists = self.test_status_exists
+        prConditions.tests_already_triggered = self.tests_already_triggered
+        prConditions.legit_tests = self.legit_tests
+        prConditions.lastCommitDate = self.lastCommitDate
+        prConditions.newPR = self.newPR
+        prConditions.commentsList = self.commentsList
+        prConditions.lastTimeSeen = self.lastTimeSeen
+        prConditions.previousBotComments = self.previousBotComments
+        prConditions.botInvokingComments = self.botInvokingComments
+        prConditions.testsRequested = self.testsRequested
+        prConditions.extraEnvs = self.extraEnvs
+
+        return prConditions 
+
+    @staticmethod
+    def generate(gh, pr, repo):
+        conditions = PRConditionsBuilder(gh, pr, repo).\
+                     determineAuthorizations().\
+                     determineModifiedFoldersWatchersTests().\
+                     determineCommitInfoAndTestStatus().\
+                     determineIfNew().\
+                     determineIfBotInvoked().\
+                     build()
+        return conditions
+
+
+
+
