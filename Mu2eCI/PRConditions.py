@@ -35,7 +35,8 @@ class PRConditions:
         self.commitStatusTime = {} # DONE
         self.baseHeadChanged = None # bool # DONE
         # commit test states:
-        self.test_statuses = {} # DONE
+        self.prev_test_statuses = {} # DONE
+        self.test_urls = {}
         self.test_triggered = {} # DONE
         self.test_status_exists = {} # DONE
         self.tests_already_triggered = [] # DONE
@@ -76,7 +77,8 @@ class PRConditionsBuilder:
         self.commitStatusTime = {} # DONE
         self.baseHeadChanged = None # bool # DONE
         # commit test states:
-        self.test_statuses = {} # DONE
+        self.prev_test_statuses = {} # DONE
+        self.test_urls = {}
         self.test_triggered = {} # DONE
         self.test_status_exists = {} # DONE
         self.tests_already_triggered = [] # DONE
@@ -129,6 +131,7 @@ class PRConditionsBuilder:
         # Watchers:
         watcherListInternal = []
         watchers = config.watchers
+        log.debug("watchers: %s", ", ".join(watchers))
         modifiedTargs = [x.lower() for x in self.modifiedFolders]
         for user, packages in watchers.items():
             for pkgpatt in packages:
@@ -165,7 +168,7 @@ class PRConditionsBuilder:
                 log.warning("This commit is in the future! That is weird!")
 
 
-    def _checkIfHeadChangedSinceLastTest(self):
+    def _checkIfHeadChangedSinceLastTest(self, stat):
         log.debug("Check if this is when we last triggered the test.")
         name = "buildtest/last"
         if (
@@ -224,7 +227,7 @@ class PRConditionsBuilder:
             name = test_suites.get_test_name(stat.context)
             log.debug(f"Processing commit status: {stat.context}")
             if "buildtest/last" in stat.context:
-                self._checkIfHeadChangedSinceLastTest()
+                self._checkIfHeadChangedSinceLastTest(stat)
                 continue
             if name == "unrecognised":
                 continue
@@ -235,9 +238,9 @@ class PRConditionsBuilder:
             self.commitStatusTime[name] = stat.updated_at
 
             # error, failure, pending, success
-            self.test_statuses[name] = stat.state
+            self.prev_test_statuses[name] = stat.state
             if stat.state in state_labels:
-                self.test_statuses[name] = state_labels[stat.state]
+                self.prev_test_statuses[name] = state_labels[stat.state]
             self.legit_tests.add(name)
             self.test_status_exists[name] = True
             if (
@@ -254,10 +257,10 @@ class PRConditionsBuilder:
             # some other labels, gleaned from the description (the status API
             # doesn't support these states)
             if "running" in stat.description:
-                self.test_statuses[name] = "running"
+                self.prev_test_statuses[name] = "running"
                 self.test_urls[name] = str(stat.target_url)
             if "stalled" in stat.description:
-                self.test_statuses[name] = "stalled"
+                self.prev_test_statuses[name] = "stalled"
         return self
 
     def determineIfNew(self):
@@ -373,7 +376,8 @@ class PRConditionsBuilder:
         prConditions.commitStatusTime = self.commitStatusTime
         prConditions.baseHeadChanged = self.baseHeadChanged
         # commit test states:
-        prConditions.test_statuses = self.test_statuses
+        prConditions.prev_test_statuses = self.prev_test_statuses
+        prConditions.test_urls = self.test_urls
         prConditions.test_triggered = self.test_triggered
         prConditions.test_status_exists = self.test_status_exists
         prConditions.tests_already_triggered = self.tests_already_triggered
