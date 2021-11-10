@@ -22,7 +22,7 @@ from Mu2eCI.messages import (
     JOB_STALL_MESSAGE,
     BASE_BRANCH_HEAD_CHANGED,
 )
-from Mu2eCI.PRConditions import PRConditionsBuilder, TestFail
+from Mu2eCI.PRConditions import PRConditionsBuilder, TestTriggerResult
 
 setdefaulttimeout(300)
 
