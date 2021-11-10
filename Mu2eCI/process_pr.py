@@ -78,12 +78,25 @@ def process_pr(gh, repo, issue, dryRun=False, child_call=0):
     prConditions = PRConditionsBuilder.generate(gh, pr, repo)
 
     labels = set()
-
-    # tests we've already triggered
-    tests_already_triggered = []
+    watcher_text = ""
+    # Explanantion for why we copy the data members of PRConditions here:
+    # PRConditions hold the info retrieved from the PR, including stuff like
+    # what the current status of the latest tests is, or which tests have
+    # already been triggered. We will need to modify some of those values
+    # as we make decisions about triggering new tests and updating the status.
+    # Copying them to new variables first keeps the info retrieved from GitHub
+    # clean, and separates the code that hold PR information from the code that
+    # makes decisions and changes.
+    tests_already_triggered = prConditions.tests_already_triggered
+    doNotifyBaseHEADChanged = False
+    stalled_jobs = []
+    stalled_job_info = ""
+    test_triggered = prConditions.test_triggered
+    test_statuses = prConditions.prev_test_statuses
+    test_status_exists = prConditions.test_status_exists
+    tests_to_trigger = []
 
     # Notify the people watching the modified packages
-    watcher_text = ""
     if len(prConditions.watcherList) > 0:
         watcher_text = (
             "The following users requested to be notified about "
@@ -113,23 +126,22 @@ def process_pr(gh, repo, issue, dryRun=False, child_call=0):
             "The base branch HEAD has changed or we didn't know the base branch of the last test."
             " We need to reset the status of the build test and notify."
         )
-        prConditions.test_triggered["build"] = False
-        prConditions.prev_test_statuses["build"] = "pending"
-        prConditions.test_status_exists["build"] = False
+        test_triggered["build"] = False
+        test_statuses["build"] = "pending"
+        test_status_exists["build"] = False
+        doNotifyBaseHEADChanged = True
     elif prConditions.baseHeadChanged:
         log.info(
             "The build test status is not present or has already been reset. "
             "We will not notify about the changed HEAD."
         )
-        prConditions.baseHeadChanged = False
+        doNotifyBaseHEADChanged = False
 
     # check if we've stalled
     # Tests that are not outdated because of a HEAD change, but were triggered
     # a long time ago and have never completed, are considered to have stalled.
-    # Reset their status to "pending"
+    # Update the status to reflect this.
     tests_ = prConditions.prev_test_statuses.keys()
-    stalled_jobs = []
-    stalled_job_info = ""
     for name in tests_:
         if name not in prConditions.legit_tests:
             continue
@@ -146,9 +158,9 @@ def process_pr(gh, repo, issue, dryRun=False, child_call=0):
             log.info("  Has been running for %d seconds", test_runtime)
             if test_runtime > test_suites.get_stall_time(name):
                 log.info("  The test has stalled.")
-                prConditions.test_triggered[name] = False  # the test may be triggered again.
-                prConditions.prev_test_statuses[name] = "stalled"
-                prConditions.test_status_exists[name] = False
+                test_triggered[name] = False  # the test may be triggered again.
+                test_statuses[name] = "stalled"
+                test_status_exists[name] = False
                 stalled_jobs += [name]
                 if name in prConditions.test_urls:
                     stalled_job_info += "\n- %s ([more info](%s))" % (
@@ -157,8 +169,11 @@ def process_pr(gh, repo, issue, dryRun=False, child_call=0):
                     )
             else:
                 log.info("  The test has not stalled yet...")
-    if "build" in legit_tests and master_commit_sha_last_test is None:
-        if "build" in test_statuses and test_statuses["build"] in [
+    # If we somehow got a test status indicating a completed build test, but
+    # it's not connected to a commit, we can't say for sure whether the PR's 
+    # tests are up-to-date or not. Reset the build test status to pending.
+    if "build" in prConditions.legit_tests and prConditions.baseCommitSha_lastTest is None:
+        if "build" in prConditions.prev_test_statuses and prConditions.prev_test_statuses["build"] in [
             "success",
             "finished",
             "error",
