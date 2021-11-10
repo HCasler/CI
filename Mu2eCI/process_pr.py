@@ -22,7 +22,7 @@ from Mu2eCI.messages import (
     JOB_STALL_MESSAGE,
     BASE_BRANCH_HEAD_CHANGED,
 )
-from Mu2eCI.PRConditions import PRConditionsBuilder
+from Mu2eCI.PRConditions import PRConditionsBuilder, TestFail
 
 setdefaulttimeout(300)
 
@@ -79,6 +79,9 @@ def process_pr(gh, repo, issue, dryRun=False, child_call=0):
 
     labels = set()
     watcher_text = ""
+    tests_triggered_msg = ""
+    already_running_msg = ""
+    stalled_job_info = ""
     # Explanantion for why we copy the data members of PRConditions here:
     # PRConditions hold the info retrieved from the PR, including stuff like
     # what the current status of the latest tests is, or which tests have
@@ -90,11 +93,14 @@ def process_pr(gh, repo, issue, dryRun=False, child_call=0):
     tests_already_triggered = prConditions.tests_already_triggered
     doNotifyBaseHEADChanged = False
     stalled_jobs = []
-    stalled_job_info = ""
     test_triggered = prConditions.test_triggered
     test_statuses = prConditions.prev_test_statuses
     test_status_exists = prConditions.test_status_exists
     tests_to_trigger = []
+    test_triggered = prConditions.test_triggered
+    # we can translate git commit status API 'state' strings if needed.
+    state_labels = config.main["labels"]["states"]
+    state_labels_colors = config.main["labels"]["colors"]
 
     # Notify the people watching the modified packages
     if len(prConditions.watcherList) > 0:
@@ -169,6 +175,7 @@ def process_pr(gh, repo, issue, dryRun=False, child_call=0):
                     )
             else:
                 log.info("  The test has not stalled yet...")
+
     # If we somehow got a test status indicating a completed build test, but
     # it's not connected to a commit, we can't say for sure whether the PR's 
     # tests are up-to-date or not. Reset the build test status to pending.
@@ -186,115 +193,67 @@ def process_pr(gh, repo, issue, dryRun=False, child_call=0):
                 "There's no record of when we last triggered the build test, "
                 "and the status is not pending, so we are resetting the status."
             )
- # keep a track of our comments to avoid duplicate messages and spam.
 
-    # # now we process comments
-    # for comment in comments:
-    #     if comment.user.login == config.main["bot"]["username"]:
-    #         bot_comments += [comment.body.strip()]
+    # Loop through all the comments that invoked FNALbuildbot. If the comment
+    # requested a test, check that the test either hasn't been requested yet,
+    # or has already finished, before adding it to the list of tests to be
+    # triggered. Add a reaction to the comment, so the PR author knows the bot
+    # has seen the comment.
+    # Loop using index, to synchronize comments, requested tests, etc
+    for i in range(0, len(prConditions.botInvokingComments)):
+        reaction_t = None
+        comment = prConditions.botInvokingComments[i]
+        testsRequested = prConditions.testsRequested[i]
+        testTriggerResult = prConditions.testTriggerResults[i]
+        extraEnv = prConditions.extraEnvs[i]
+        if testTriggerResult == TestTriggerResult.INVALIDINPUT:
+            reaction_t = "-1"
+        elif testTriggerResult == TestTriggerResult.NOCOMMAND:
+            reaction_t = "confused"
+        elif testTriggerResult == TestTriggerResult.SUCCESS:
+            for test in testsRequested:
+                # Check if the test has been triggered on this commit first
+                if (
+                    test in test_triggered
+                    and test_triggered[test]
+                    and test in test_statuses
+                    and not test_statuses[test].strip()
+                    in ["failed", "error", "success", "finished"]
+                ):
+                    log.debug("Current test status: %s", test_statuses[test])
+                    log.info(
+                        "The test has already been triggered for this ref. "
+                        "It will not be triggered again."
+                    )
+                    tests_already_triggered.append(test)
+                    reaction_t = "confused"
+                    continue
+                else:
+                    test_triggered[test] = False
 
-    #     # Ignore all messages which are before last commit.
-    #     if comment.created_at < last_commit_date:
-    #         log.debug("IGNORE COMMENT (before last commit)")
-    #         continue
+                if not test_triggered[test]:  # is the test already running?
+                    # ok - now we can trigger the test
+                    log.info(
+                        "The test has not been triggered yet. It will now be triggered."
+                    )
 
-    #     # neglect comments we've already responded to
-    #     if last_time_seen is not None and (comment.created_at < last_time_seen):
-    #         log.debug(
-    #             "IGNORE COMMENT (seen) %s %s < %s",
-    #             comment.user.login,
-    #             str(comment.created_at),
-    #             str(last_time_seen),
-    #         )
-    #         continue
+                    # update the 'state' of this commit
+                    test_statuses[test] = "pending"
+                    test_triggered[test] = True
 
-    #     # neglect comments by un-authorised users
-    #     if (
-    #         comment.user.login not in authorised_users
-    #         or comment.user.login == config.main["bot"]["username"]
-    #     ):
-    #         log.debug(
-    #             "IGNORE COMMENT (unauthorised, or bot user) - %s", comment.user.login
-    #         )
-    #         continue
+                    # add the test to the queue of tests to trigger
+                    tests_to_trigger.append((test, extraEnv))
+                    reaction_t = "+1"
+        if reaction_t is not None:
+            # "React" to the comment to let the user know we have acknowledged their comment!
+            comment.create_reaction(reaction_t)
 
-    #     for react in comment.get_reactions():
-    #         if react.user.login == config.main["bot"]["username"]:
-    #             log.debug(
-    #                 "IGNORE COMMENT (we've seen it and reacted to say we've seen it) - %s",
-    #                 comment.user.login,
-    #             )
-
-    #     reaction_t = None
-    #     trigger_search, mentioned = None, None
-    #     # now look for bot triggers
-    #     # check if the comment has triggered a test
-    #     try:
-    #         trigger_search, mentioned = check_test_cmd_mu2e(
-    #             comment.body, repo.full_name
-    #         )
-    #     except ValueError:
-    #         log.exception("Failed to trigger a test due to invalid inputs")
-    #         reaction_t = "-1"
-    #     except Exception:
-    #         log.exception("Failed to trigger a test.")
-
-    #     tests_already_triggered = []
-
-    #     if trigger_search is not None:
-    #         tests, _, extra_env = trigger_search
-    #         log.info("Test trigger found!")
-    #         log.debug("Comment: %r", comment.body)
-    #         log.debug("Environment: %s", str(extra_env))
-    #         log.info("Current test(s): %r" % tests_to_trigger)
-    #         log.info("Adding these test(s): %r" % tests)
-
-    #         for test in tests:
-    #             # check that the test has been triggered on this commit first
-    #             if (
-    #                 test in test_triggered
-    #                 and test_triggered[test]
-    #                 and test in test_statuses
-    #                 and not test_statuses[test].strip()
-    #                 in ["failed", "error", "success", "finished"]
-    #             ):
-    #                 log.debug("Current test status: %s", test_statuses[test])
-    #                 log.info(
-    #                     "The test has already been triggered for this ref. "
-    #                     "It will not be triggered again."
-    #                 )
-    #                 tests_already_triggered.append(test)
-    #                 reaction_t = "confused"
-    #                 continue
-    #             else:
-    #                 test_triggered[test] = False
-
-    #             if not test_triggered[test]:  # is the test already running?
-    #                 # ok - now we can trigger the test
-    #                 log.info(
-    #                     "The test has not been triggered yet. It will now be triggered."
-    #                 )
-
-    #                 # update the 'state' of this commit
-    #                 test_statuses[test] = "pending"
-    #                 test_triggered[test] = True
-
-    #                 # add the test to the queue of tests to trigger
-    #                 tests_to_trigger.append((test, extra_env))
-    #                 reaction_t = "+1"
-    #     elif mentioned:
-    #         # we didn't recognise any commands!
-    #         reaction_t = "confused"
-
-    #     if reaction_t is not None:
-    #         # "React" to the comment to let the user know we have acknowledged their comment!
-    #         comment.create_reaction(reaction_t)
 
     # trigger the 'default' tests if this is the first time we've seen this PR:
     # (but, only if they are in the Mu2e org)
-    if trusted_user:
-        if not_seen_yet and not dryRun and test_suites.AUTO_TRIGGER_ON_OPEN:
-            for test in test_requirements:
+    if prConditions.trustedAuthor:
+        if prConditions.newPR and not dryRun and test_suites.AUTO_TRIGGER_ON_OPEN:
+            for test in prConditions.requiredTests:
                 test_statuses[test] = "pending"
                 test_triggered[test] = True
                 if test not in [t[0] for t in tests_to_trigger]:
@@ -309,7 +268,7 @@ def process_pr(gh, repo, issue, dryRun=False, child_call=0):
 
     triggered_tests, extra_envs = list(zip(*tests_to_trigger)) or ([], [])
     for test, state in test_statuses.items():
-        if test in legit_tests:
+        if test in prConditions.legit_tests:
             labels.add(f"{test} {state}")
 
         if test in triggered_tests:
@@ -319,8 +278,8 @@ def process_pr(gh, repo, issue, dryRun=False, child_call=0):
                 test,
                 repo.full_name,
                 prId,
-                git_commit.sha,
-                master_commit_sha,
+                prConditions.lastCommit.commit.sha,
+                prConditions.baseCommitSha,
                 extra_envs[triggered_tests.index(test)],
             )
             if not dryRun:
@@ -328,15 +287,15 @@ def process_pr(gh, repo, issue, dryRun=False, child_call=0):
                     # we need to store somewhere the master commit SHA
                     # that we merge into for the build test (for validation)
                     # this is overlapped with the next, more human readable message
-                    last_commit.create_status(
+                    prConditions.lastCommit.create_status(
                         state="success",
                         target_url="https://github.com/mu2e/%s" % repo.name,
                         description="Last test triggered against %s"
-                        % master_commit_sha[:8],
+                        % prConditions.baseCommitSha[:8],
                         context="mu2e/buildtest/last",
                     )
 
-                last_commit.create_status(
+                prConditions.lastCommit.create_status(
                     state="pending",
                     target_url="https://github.com/mu2e/%s" % repo.name,
                     description="The test has been triggered in Jenkins",
@@ -344,18 +303,18 @@ def process_pr(gh, repo, issue, dryRun=False, child_call=0):
                 )
             log.info(
                 "Git status created for SHA %s test %s - since the test has been triggered.",
-                git_commit.sha,
+                prConditions.lastCommit.commit.sha,
                 test,
             )
         elif state == "pending" and test_status_exists[test]:
             log.info(
                 "Git status unchanged for SHA %s test %s - the existing one is up-to-date.",
-                git_commit.sha,
+                prConditions.lastCommit.commit.sha,
                 test,
             )
         elif state == "stalled" and not test_status_exists[test]:
             log.info("Git status was pending, but the job has stalled.")
-            last_commit.create_status(
+            prConditions.lastCommit.create_status(
                 state="error",
                 target_url="https://github.com/mu2e/%s" % repo.name,
                 description="The job has stalled on Jenkins. It can be re-triggered.",
@@ -371,13 +330,13 @@ def process_pr(gh, repo, issue, dryRun=False, child_call=0):
             log.debug(test_status_exists)
             log.info(
                 "Git status created for SHA %s test %s - since there wasn't one already."
-                % (git_commit.sha, test)
+                % (prConditions.lastCommit.commit.sha, test)
             )
             labels.add(f"{test} {state}")
             # indicate that the test is pending but
             # we're still waiting for someone to trigger the test
             if not dryRun:
-                last_commit.create_status(
+                prConditions.lastCommit.create_status(
                     state="pending",
                     target_url="https://github.com/mu2e/%s" % repo.name,
                     description="This test has not been triggered yet.",
@@ -406,9 +365,7 @@ def process_pr(gh, repo, issue, dryRun=False, child_call=0):
         log.exception("Failed to set label colours!")
 
     # construct a reply if tests have been triggered.
-    tests_triggered_msg = ""
-    already_running_msg = ""
-    commitlink = git_commit.sha
+    commitlink = prConditions.lastCommit.commit.sha
 
     if len(tests_to_trigger) > 0:
         if len(tests_already_triggered) > 0:
@@ -424,30 +381,30 @@ def process_pr(gh, repo, issue, dryRun=False, child_call=0):
         )
 
     # decide if we should issue a comment, and what comment to issue
-    if not_seen_yet:
+    if prConditions.newPR:
         log.info("First time seeing this PR - send the user a salutation!")
         if not dryRun:
             post_on_pr(
                 issue,
                 PR_SALUTATION.format(
-                    pr_author=pr_author,
+                    pr_author=prConditions.author ,
                     changed_folders="\n".join(
-                        ["- %s" % s for s in modified_top_level_folders]
+                        ["- %s" % s for s in prConditions.modifiedFolders]
                     ),
-                    tests_required=", ".join(test_requirements),
+                    tests_required=", ".join(prConditions.requiredTests),
                     watchers=watcher_text,
-                    auth_teams=", ".join(["@Mu2e/%s" % team for team in authed_teams]),
+                    auth_teams=", ".join(["@Mu2e/%s" % team for team in prConditions.authedTeams]),
                     tests_triggered_msg=tests_triggered_msg,
-                    non_member_msg="" if trusted_user else PR_AUTHOR_NONMEMBER,
+                    non_member_msg="" if prConditions.trustedAuthor else PR_AUTHOR_NONMEMBER,
                     base_branch=pr.base.ref,
                 ),
-                bot_comments,
+                prConditions.previousBotComments,
             )
 
     elif len(tests_to_trigger) > 0:
         # tests were triggered, let people know about it
         if not dryRun:
-            post_on_pr(issue, tests_triggered_msg, bot_comments)
+            post_on_pr(issue, tests_triggered_msg, prConditions.previousBotComments)
 
     elif len(tests_to_trigger) == 0 and len(tests_already_triggered) > 0:
         if not dryRun:
@@ -457,7 +414,7 @@ def process_pr(gh, repo, issue, dryRun=False, child_call=0):
                     commit_link=commitlink,
                     triggered_tests=", ".join(tests_already_triggered),
                 ),
-                bot_comments,
+                prConditions.previousBotComments,
             )
 
     if jobs_have_stalled and not dryRun:
@@ -466,22 +423,22 @@ def process_pr(gh, repo, issue, dryRun=False, child_call=0):
             JOB_STALL_MESSAGE.format(
                 joblist=", ".join(stalled_jobs), info=stalled_job_info
             ),
-            bot_comments,
+            prConditions.previousBotComments,
         )
-    if base_branch_HEAD_changed and not dryRun and not len(tests_to_trigger) > 0:
+    if doNotifyBaseHEADChanged and not dryRun and not len(tests_to_trigger) > 0:
         post_on_pr(
             issue,
             BASE_BRANCH_HEAD_CHANGED.format(
-                base_ref=pr.base.ref, base_sha=master_commit_sha
+                base_ref=pr.base.ref, base_sha=prConditions.baseCommitSha
             ),
-            bot_comments,
+            prConditions.previousBotComments,
         )
     if "build" in test_status_exists:
-        if future_commit and not test_status_exists["build"] and not dryRun:
+        if prConditions.future_commit and not test_status_exists["build"] and not dryRun:
             post_on_pr(
                 issue,
-                f":memo: The latest commit by @{git_commit.committer.name} is "
-                f"timestamped {future_commit_timedelta_string} in the future. "
+                f":memo: The latest commit by @{prConditions.lastCommit.commit.committer.name} is "
+                f"timestamped {prConditions.future_commit_timedelta_string} in the future. "
                 "Please check that the date and time is set correctly when creating new commits.",
-                bot_comments,
+                prConditions.previousBotComments,
             )
