@@ -13,10 +13,11 @@ from Mu2eCI.common import (
     get_modified
 )
 
-class TestFail:
+class TestTriggerResult:
     NOCOMMAND = "nocommand"
     INVALIDINPUT = "invalidinput"
     GENERICFAIL = "genericfail"
+    SUCCESS = "success"
 
 class PRConditions:
     # Class that just hold the info we need to decide what to do with this PR.
@@ -34,6 +35,8 @@ class PRConditions:
         self.baseCommitSha_lastTest = None # str # DONE
         self.commitStatusTime = {} # DONE
         self.baseHeadChanged = None # bool # DONE
+        self.future_commit = None # bool
+        self.future_commit_timedelta_string = None # str
         # commit test states:
         self.prev_test_statuses = {} # DONE
         self.test_urls = {}
@@ -47,6 +50,7 @@ class PRConditions:
         self.lastTimeSeen = None # DONE
         self.previousBotComments = [] # str, comments BY the bot
         self.botInvokingComments = [] # gh comments, by others TAGGING the bot
+        self.testTriggerResults = []
         self.testsRequested = [] # indices sync up with botInvokingComments
         self.extraEnvs = []
 
@@ -76,6 +80,8 @@ class PRConditionsBuilder:
         self.baseCommitSha_lastTest = None # str # DONE
         self.commitStatusTime = {} # DONE
         self.baseHeadChanged = None # bool # DONE
+        self.future_commit = None # bool
+        self.future_commit_timedelta_string = None # str
         # commit test states:
         self.prev_test_statuses = {} # DONE
         self.test_urls = {}
@@ -89,6 +95,7 @@ class PRConditionsBuilder:
         self.lastTimeSeen = None # DONE
         self.previousBotComments = [] # str, comments BY the bot
         self.botInvokingComments = [] # gh comments, by others TAGGING the bot
+        self.testTriggerResults = []
         self.testsRequested = [] # indices sync up with botInvokingComments
         self.extraEnvs = []
         
@@ -158,13 +165,13 @@ class PRConditionsBuilder:
         log.info("Merging into: %s %s", self.pr.base.ref, self.baseCommitSha)
         log.info("PR update time %s", self.pr.updated_at)
         log.info("Time UTC: %s", datetime.utcnow())
-        future_commit = False
-        future_commit_timedelta_string = None
+        self.future_commit = False
+        self.future_commit_timedelta_string = None
         if last_commit_date > datetime.utcnow():
             future_td = last_commit_date - datetime.utcnow()
             if future_td.total_seconds() > 120:
-                future_commit = True
-                future_commit_timedelta_string = str(future_td) + " (hh:mm:ss)"
+                self.future_commit = True
+                self.future_commit_timedelta_string = str(future_td) + " (hh:mm:ss)"
                 log.warning("This commit is in the future! That is weird!")
 
 
@@ -314,6 +321,7 @@ class PRConditionsBuilder:
         bot_comments = (
             []
         )  # keep a track of our comments to avoid duplicate messages and spam.
+        comments = self.pr.as_issue().get_comments()
         for comment in comments:
             if comment.user.login == config.main["bot"]["username"]:
                 bot_comments += [comment.body.strip()]
@@ -326,6 +334,7 @@ class PRConditionsBuilder:
                         "IGNORE COMMENT (we've seen it and reacted to say we've seen it) - %s",
                         comment.user.login,
                     )
+            testTriggerResult = None
             testRequested = None
             extraEnv = None
             trigger_search, mentioned = None, None
@@ -338,10 +347,10 @@ class PRConditionsBuilder:
                 )
             except ValueError:
                 log.exception("Failed to trigger a test due to invalid inputs")
-                testRequested = TestFail.INVALIDINPUT
+                testTriggerResult = TestTriggerResult.INVALIDINPUT
             except Exception:
                 log.exception("Failed to trigger a test.")
-                testRequested = TestFail.GENERICFAIL
+                testTriggerResult = TestTriggerResult.GENERICFAIL
             if trigger_search is not None:
                 tests, _, extra_env = trigger_search
                 log.info("Test trigger found!")
@@ -349,13 +358,18 @@ class PRConditionsBuilder:
                 log.debug("Environment: %s", str(extra_env))
                 #log.info("Current test(s): %r" % tests_to_trigger)
                 log.info("Adding these test(s): %r" % tests)
+                testTriggerResult = TestTriggerResult.SUCCESS
                 testRequested = tests
                 extraEnv = extra_env
             elif mentioned:
                 # we didn't recognise any commands!
-                testRequested = TestFail.NOCOMMAND
+                testRequested = TestTriggerResult.NOCOMMAND
+            if testTriggerResult is None:
+                # just in case
+                testTriggerResult = TestTriggerResult.GENERICFAIL
             self.botInvokingComments.append(comment)
             self.testsRequested.append(testRequested)
+            self.testTriggerResults.append(testTriggerResult)
             self.extraEnvs.append(extraEnv)
         self.previousBotComments = bot_comments
         return self
@@ -388,8 +402,11 @@ class PRConditionsBuilder:
         prConditions.lastTimeSeen = self.lastTimeSeen
         prConditions.previousBotComments = self.previousBotComments
         prConditions.botInvokingComments = self.botInvokingComments
+        prConditions.testTriggerResults = self.testTriggerResults
         prConditions.testsRequested = self.testsRequested
         prConditions.extraEnvs = self.extraEnvs
+        prConditions.future_commit = self.future_commit
+        prConditions.future_commit_timedelta_string =  self.future_commit_timedelta_string
 
         return prConditions 
 
