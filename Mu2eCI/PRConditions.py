@@ -315,6 +315,7 @@ class PRConditionsBuilder:
                 "IGNORE COMMENT (unauthorised, or bot user) - %s", comment.user.login
             )
             return True
+        return False
 
 
     def determineIfBotInvoked(self):
