@@ -117,6 +117,7 @@ def create_properties_file_for_test(
     pr_commit_sha,
     master_commit_sha,
     extra_env,
+    trigger_validation=False,
     dryRun=False,
 ):
     parameters = {**extra_env}
@@ -133,6 +134,8 @@ def create_properties_file_for_test(
     parameters["PULL_REQUEST"] = pr_number
     parameters["COMMIT_SHA"] = pr_commit_sha
     parameters["MASTER_COMMIT_SHA"] = master_commit_sha
+    if trigger_validation:
+        parameters["TRIGGER_VALIDATION"] = trigger_validation
 
     if dryRun:
         log.info("Not creating cleanup properties file (dry-run): %s", out_file_name)
