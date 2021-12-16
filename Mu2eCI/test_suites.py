@@ -13,18 +13,21 @@ REGEX_DEFTEST_MU2E_PR = re.compile(TEST_REGEXP_MU2E_DEFTEST_TRIGGER, re.I | re.M
 # build test
 # @FNALbuild build [with #257, #322, ...] [without merge]
 # @FNALbuild run build test[s] [with #257, #322, ...] [without merge]
+# @FNALbuild run build test[s] and validate [with #257, #322, ...] [without merge]
 # Group 1: @FNALbuild
-# Group 8: [with #257, #322, ...]
-# Group 11: [without merge]
+# Group 8: [and validate] or [and validation]
+# Group 11: [with #257, #322, ...]
+# Group 14: [without merge]
 TEST_REGEXP_MU2E_BUILDTEST_TRIGGER = (
     rf"(@{MU2E_BOT_USER})(\s*[,:;]*\s+|\s+)"
     r"(please\s*[,]*\\s+|)((build)|(run\s+build\s+test(s|)))"
+    r"(?P<trigger_validation>(\s+and|)\s+validat(e|ion)|)"
     r"(?P<test_with>\s+with\s+((Mu2e\/[A-Za-z0-9_-]+|)#[0-9]+([\\s,]+|))+|)"
     r"(?P<wo_merge>\s*without\s+merge|)"
 )
 REGEX_BUILDTEST_MU2E_PR = re.compile(TEST_REGEXP_MU2E_BUILDTEST_TRIGGER, re.I | re.M)
 
-# build test WITH validation
+# build test WITH validation -- UNUSED, use the regular buildtest trigger for this for now
 TEST_REGEXP_MU2E_BUILDTEST_TRIGGER_VAL = (
     r"(@%s)(\s*[,:;]*\s+|\s+)(please\s*[,]*\s+|)((build)|(run\s+build\s+test(s|)))(\s+and\s+validat(e|ion))"
     % MU2E_BOT_USER
@@ -114,9 +117,12 @@ def build_test_configuration(matched_re):
     # @FNALbuild build [with #257, #322, ...] [without merge]
     # @FNALbuild run build test[s] [with #257, #322, ...] [without merge]
     # @FNALbuild run build test[s] [with Mu2e/Production#257, #322, ...] [without merge]
+    # @FNALbuild run build test[s] [and validate] [with Mu2e/Production#257, #322, ...] [without merge]
+
 
     test_with = matched_re.group("test_with")
     no_merge = matched_re.group("wo_merge")
+    trigger_validation = matched_re.group("trigger_validation")
 
     test_with = (
         (test_with.replace("with", "").strip()) if len(test_with.strip()) > 0 else ""
@@ -137,11 +143,12 @@ def build_test_configuration(matched_re):
             prs_to_include.append(f"{repository}#{pr_id}")
 
     no_merge = "1" if len(no_merge.strip()) > 0 else "0"
+    trigger_validation = "1" if len(trigger_validation.strip()) > 0 else "0"
 
     return (
         ["build"],
         "current",
-        {"TEST_WITH_PR": ",".join(prs_to_include), "NO_MERGE": no_merge},
+        {"TEST_WITH_PR": ",".join(prs_to_include), "NO_MERGE": no_merge, "TRIGGER_VALIDATION": trigger_validation},
     )
 
 
