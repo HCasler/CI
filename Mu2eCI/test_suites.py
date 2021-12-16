@@ -27,7 +27,7 @@ TEST_REGEXP_MU2E_BUILDTEST_TRIGGER = (
 )
 REGEX_BUILDTEST_MU2E_PR = re.compile(TEST_REGEXP_MU2E_BUILDTEST_TRIGGER, re.I | re.M)
 
-# build test WITH validation -- UNUSED, use the regular buildtest trigger for this for now
+# build test WITH validation -- UNUSED, use the regular buildtest trigger for this
 TEST_REGEXP_MU2E_BUILDTEST_TRIGGER_VAL = (
     r"(@%s)(\s*[,:;]*\s+|\s+)(please\s*[,]*\s+|)((build)|(run\s+build\s+test(s|)))(\s+and\s+validat(e|ion))"
     % MU2E_BOT_USER
@@ -44,7 +44,7 @@ TEST_REGEXP_MU2E_LINTTEST_TRIGGER = (
 )
 REGEX_LINTTEST_MU2E_PR = re.compile(TEST_REGEXP_MU2E_LINTTEST_TRIGGER, re.I | re.M)
 
-# physics validation
+# physics validation -- Unused for now, would be used to run a validation test on its own, rather than getting launched by a completed build test
 TEST_REGEXP_MU2E_VALIDATION_TRIGGER = (
     r"(@%s)(\s*[,:;]*\s+|\s+)(please\s*[,]*\s+|)(run\s+validation)" % MU2E_BOT_USER
 )
@@ -156,6 +156,6 @@ TESTS = [
     # [REGEX_CUSTOM_TEST_MU2E_PR, process_custom_test_request],
     [REGEX_BUILDTEST_MU2E_PR, build_test_configuration],
     [REGEX_LINTTEST_MU2E_PR, lambda matchre: (["code checks"], "current", {})],
-    [REGEX_VALIDATIONTEST_MU2E_PR, lambda matchre: (["validation"], "current", {})],
+    #[REGEX_VALIDATIONTEST_MU2E_PR, lambda matchre: (["validation"], "current", {})],
     [REGEX_DEFTEST_MU2E_PR, lambda matchre: (DEFAULT_TESTS, "current", {})],
 ]
