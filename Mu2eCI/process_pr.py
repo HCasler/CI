@@ -357,6 +357,7 @@ def process_pr(gh, repo, issue, dryRun=False, child_call=0):
     )  # keep a track of our comments to avoid duplicate messages and spam.
 
     # now we process comments
+    validation_missing_build = False
     for comment in comments:
         if comment.user.login == config.main["bot"]["username"]:
             bot_comments += [comment.body.strip()]
@@ -438,6 +439,16 @@ def process_pr(gh, repo, issue, dryRun=False, child_call=0):
                     test_triggered[test] = False
 
                 if not test_triggered[test]:  # is the test already running?
+                    # Only run the validation tests if the build tests have already succeeded
+                    # on the most recent version of the PR (including base HEAD changes)
+                    if (test == "validation"
+                        and ("build" not in test_statuses or test_statuses["build"] != "success")
+                    ):
+                        log.info("Will not trigger validation test before successful completion of build test.")
+                        if "build" in test_statuses:
+                            log.info("build test status is {0}.".format(test_statuses["build"]))
+                        validation_missing_build = True
+                        continue
                     # ok - now we can trigger the test
                     log.info(
                         "The test has not been triggered yet. It will now be triggered."
@@ -653,3 +664,12 @@ def process_pr(gh, repo, issue, dryRun=False, child_call=0):
                 "Please check that the date and time is set correctly when creating new commits.",
                 bot_comments,
             )
+    if validation_missing_build and not dryRun:
+        post_on_pr(
+            issue,
+            f":memo: Cannot run validation until build tests have completed "
+            f"successfully. If build tests have not been started, you can "
+            f"start them using one of the commands here: "
+            f"[About FNALbuild.](https://mu2ewiki.fnal.gov/wiki/GitHubWorkflow#GitHub_Pull_Request_Procedures_and_FNALbuild)."
+            bot_comments,
+        )
